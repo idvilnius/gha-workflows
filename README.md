@@ -33,7 +33,7 @@ jobs:
   Security:
     name: 🔐 ID Vilnius Security Scan
     needs: [GenerateImageVersion, Build]
-    uses: idvilnius/gha-workflows/.github/workflows/security.yaml@v1
+    uses: idvilnius/.github/workflows/security.yaml@v1
     with:
       docker_image: ${{ env.ACR_IMAGE }}
       image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}

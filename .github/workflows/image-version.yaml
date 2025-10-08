@@ -1,39 +1,46 @@
-name: Image Version Generation
+name: Build and push workflow
 
 on:
-  workflow_call:
-    outputs:
-      image_version:
-        description: 'Generated image version'
-        value: ${{ jobs.GenerateImageVersion.outputs.image_version }}
+  push:
+    branches:
+      - main
+  pull_request: {}
+
 
 jobs:
   GenerateImageVersion:
-    name: 🏷 Generate Image Version
-    runs-on: ubuntu-latest
-    outputs:
-      image_version: ${{ steps.set_image_version.outputs.image_version }}
+    name: ID Vilnius Generate Image Version
+    uses: idvilnius/gha-workflows/.github/workflows/image-version.yaml@main
 
-    steps:
-      - name: ⬇️ Checkout repo
-        uses: actions/checkout@v4
+  Build:
+    name: ID Vilnius Build image
+    needs: [GenerateImageVersion]
+    uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
+    with:
+      docker_image: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+      image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}
+      build_step: |
+        docker build -t "${{ vars.AZURE_CONTAINER_REGISTRY }}:${{ needs.GenerateImageVersion.outputs.image_version }}" .
+    secrets: inherit
 
-      - name: 🏷 Extract tag
-        id: extract_tag
-        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-        if: startsWith(github.ref, 'refs/tags/')
+  Security:
+    name: 🔐 ID Vilnius Security Scan
+    needs: [GenerateImageVersion, Build]
+    uses: idvilnius/gha-workflows/.github/workflows/security.yaml@main
+    with:
+      docker_image: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+      image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}
 
-      - name: 🔢 Generate short SHA
-        id: generate_sha
-        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+  PublishDev:
+    name: 📦 ID Vilnius Publish to ACR
+    needs: [GenerateImageVersion, Security]
+    if: ${{ github.ref == 'refs/heads/staging-sview-infra' }}
+    uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
+    with:
+      docker_image: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+      image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}
+    secrets:
+      acr_username: ${{ secrets.ACR_USERNAME }}
+      acr_password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: 🏷 Set image version
-        id: set_image_version
-        run: |
-          if [ ! -z "${{ env.TAG }}" ]; then
-            echo "image_version=${{ env.TAG }}-${{ env.SHORT_SHA }}" >> "${GITHUB_OUTPUT}"
-          else
-            echo "image_version=${{ env.SHORT_SHA }}" >> "${GITHUB_OUTPUT}"
-          fi
-
-    
+#trigger build
