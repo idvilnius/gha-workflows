@@ -66,10 +66,12 @@ jobs:
 
       - name: Save Docker Image to Artifact
         run: |
-          docker save ${{ inputs.docker_image }}:${{ inputs.image_tag }} -o ${{ inputs.docker_image }}.tar
-        # Upload the Docker image tarball as an artifact
+            docker image inspect "${{ inputs.docker_image }}:${{ inputs.image_tag }}" >/dev/null
+            docker save "${{ inputs.docker_image }}:${{ inputs.image_tag }}" -o image.tar
+        
       - name: Upload Docker Image Artifact
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
-          path: ${{ inputs.docker_image }}.tar
+          path: image.tar
+          retention-days: 7
