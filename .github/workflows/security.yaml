@@ -1,0 +1,167 @@
+# .github/workflows/security.yml
+name: Security and License Scan
+
+env:
+  TRIVY_VERSION: 0.56.1
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        type: string
+        description: 'Docker image name with tag for scanning'
+        required: true
+      image_tag:
+        type: string
+        description: 'Image tag for the Docker image'
+        required: true
+      security_scan_enabled:
+        type: string
+        description: 'Enable security scanning'
+        required: false
+        default: 'true'
+      timeout:
+        type: string
+        description: 'Timeout for the scan'
+        required: false
+        default: '5m'
+      license_scan_enabled:
+        type: string
+        description: 'Enable license scanning'
+        required: false
+        default: 'true'
+      continue_on_error:
+        type: boolean
+        description: 'Continue on error for license and security scan'
+        default: true
+        required: false
+
+jobs:
+  security_scan:
+    name: 🔐 Security Scan
+    if: ${{ inputs.security_scan_enabled == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.continue_on_error }}
+    steps:
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: docker load -i "${{ inputs.docker_image }}.tar"
+
+      - name: Generate cache key for Trivy download
+        id: cache-key
+        run: |
+          echo "trivy-cache-key=$(echo -n 'trivy-v${{ env.TRIVY_VERSION }}' | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+
+      - name: Restore Trivy from cache
+        id: cache-trivy
+        uses: actions/cache@v3
+        with:
+          path: trivy
+          key: ${{ env.trivy-cache-key }}
+
+      - name: Download Trivy if not cached
+        if: steps.cache-trivy.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz -O trivy.tar.gz
+          mkdir -p trivy
+          mv trivy.tar.gz trivy/
+          cd trivy && tar zxvf trivy.tar.gz
+
+      - name: Cache Trivy after download
+        if: steps.cache-trivy.outputs.cache-hit != 'true'
+        uses: actions/cache@v3
+        with:
+          path: trivy
+          key: ${{ env.trivy-cache-key }}
+
+      - name: Restore DB from cache
+        uses: actions/cache@v4
+        with:
+          path: '${{ github.workspace }}/.cache/trivy'
+          key: cache-trivy-${{ steps.date.outputs.date }}
+          restore-keys: cache-trivy-
+
+      - name: Run Security Scan on Docker Image
+        env:
+          TRIVY_CACHE_DIR: '${{ github.workspace }}/.cache/trivy'
+        run: |
+          ./trivy/trivy image --timeout ${{ inputs.timeout }} --db-repository "public.ecr.aws/aquasecurity/trivy-db:2","ghcr.io/aquasecurity/trivy-db:2" --java-db-repository "public.ecr.aws/aquasecurity/trivy-java-db:1","ghcr.io/aquasecurity/trivy-java-db:1" --severity HIGH,CRITICAL --no-progress --format json -o vulnerability.json ${{ inputs.docker_image }}:${{ inputs.image_tag }}
+
+      - name: Upload Vulnerability Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnerability-report
+          path: vulnerability.json
+          retention-days: 5
+
+  license_scan:
+    name: 📜 License Scan
+    if: ${{ inputs.license_scan_enabled == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.continue_on_error }}
+    steps:
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: docker load -i "${{ inputs.docker_image }}.tar"
+
+      - name: Generate cache key for Trivy download
+        id: cache-key
+        run: |
+          echo "trivy-cache-key=$(echo -n 'trivy-v${{ env.TRIVY_VERSION }}' | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+
+      - name: Restore Trivy from cache
+        id: cache-trivy
+        uses: actions/cache@v4
+        with:
+          path: trivy
+          key: ${{ env.trivy-cache-key }}
+
+      - name: Download Trivy if not cached
+        if: steps.cache-trivy.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.tar.gz -O trivy.tar.gz
+          mkdir -p trivy
+          mv trivy.tar.gz trivy/
+          cd trivy && tar zxvf trivy.tar.gz
+
+      - name: Cache Trivy after download
+        if: steps.cache-trivy.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: trivy
+          key: ${{ env.trivy-cache-key }}
+
+      - name: Restore DB from cache
+        uses: actions/cache@v4
+        with:
+          path: '${{ github.workspace }}/.cache/trivy'
+          key: cache-trivy-${{ steps.date.outputs.date }}
+          restore-keys: cache-trivy-
+
+      - name: Run License Scan on Docker Image
+        env:
+          TRIVY_CACHE_DIR: '${{ github.workspace }}/.cache/trivy'
+        run: |
+          ./trivy/trivy image --scanners license --severity UNKNOWN,HIGH,CRITICAL --no-progress --format json --timeout ${{ inputs.timeout }} -o license.json ${{ inputs.docker_image }}:${{ inputs.image_tag }}
+
+      - name: Upload License Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: license.json
+          retention-days: 5
+  
+  mock_step:
+    name: Mock Step
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mock Step
+        run: echo "Mock step to success Security ${{ inputs.docker_image }}:${{ inputs.image_tag }}!"

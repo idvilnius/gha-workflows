@@ -1,0 +1,56 @@
+# .github/workflows/publish-acr.yaml
+name: Publish Docker Image to ACR
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        type: string
+        description: 'Full image name without tag (e.g., cr0shared.azurecr.io/samples/hello-world)'
+        required: true
+      image_tag:
+        type: string
+        description: 'Image tag to publish'
+        required: true
+    secrets:
+      acr_username:
+        description: 'ACR username (admin user or service principal appId)'
+        required: true
+      acr_password:
+        description: 'ACR password (admin password or service principal secret)'
+        required: true
+
+jobs:
+  publish:
+    name: 🚀 Publish Docker Image to ACR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Docker Image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      # Jei build'e palikai *.tar pavadinimą su registry keliu, pakeisk čia atgal:
+      # - name: Load Docker Image
+      #   run: docker load -i "${{ inputs.docker_image }}.tar"
+
+      - name: Load Docker Image
+        run: docker load -i image.tar
+
+      - name: Extract ACR registry host
+        id: parse
+        shell: bash
+        run: |
+          REGISTRY_HOST="$(echo "${{ inputs.docker_image }}" | cut -d/ -f1)"
+          echo "registry_host=${REGISTRY_HOST}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ACR
+        run: |
+          echo "${{ secrets.acr_password }}" \
+            | docker login "${{ steps.parse.outputs.registry_host }}" \
+              -u "${{ secrets.acr_username }}" --password-stdin
+
+      - name: Push Docker Image
+        run: |
+          docker image inspect "${{ inputs.docker_image }}:${{ inputs.image_tag }}" >/dev/null
+          docker push "${{ inputs.docker_image }}:${{ inputs.image_tag }}"

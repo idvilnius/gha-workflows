@@ -1,0 +1,75 @@
+# .github/workflows/build-env.yaml
+name: Lint, Test, and Build Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      build_step:
+        description: 'Custom build step command'
+        type: string
+        required: false
+        default: 'echo "Build step is not configured!"'
+      lint_step:
+        description: 'Custom lint step command'
+        type: string
+        required: false
+        default: 'echo "Lint step is not configured!"'
+      test_step:
+        type: string
+        description: 'Custom test step command'
+        required: false
+        default: 'echo "Test step is not configured!"'
+      docker_image:
+        type: string
+        description: 'Docker image name with tag for scanning and publishing'
+        required: true
+      image_tag:
+        type: string
+        description: 'Image tag for tagging and publishing'
+        required: true
+
+jobs:
+  lint:
+    name: 🔍 Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Lint Step
+        run: ${{ inputs.lint_step }}
+
+  test:
+    name: 🧪 Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Test Step
+        run: ${{ inputs.test_step }}
+
+  build:
+    name: 🛠 Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    services:
+      docker:
+        image: docker:24.0.2-dind
+        options: --privileged
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: ${{ inputs.build_step }}
+
+      - name: Save Docker Image to Artifact
+        run: |
+          docker save ${{ inputs.docker_image }}:${{ inputs.image_tag }} -o ${{ inputs.docker_image }}.tar
+        # Upload the Docker image tarball as an artifact
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: ${{ inputs.docker_image }}.tar

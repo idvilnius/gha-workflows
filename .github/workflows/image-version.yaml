@@ -1,0 +1,39 @@
+name: Image Version Generation
+
+on:
+  workflow_call:
+    outputs:
+      image_version:
+        description: 'Generated image version'
+        value: ${{ jobs.GenerateImageVersion.outputs.image_version }}
+
+jobs:
+  GenerateImageVersion:
+    name: 🏷 Generate Image Version
+    runs-on: ubuntu-latest
+    outputs:
+      image_version: ${{ steps.set_image_version.outputs.image_version }}
+
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🏷 Extract tag
+        id: extract_tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        if: startsWith(github.ref, 'refs/tags/')
+
+      - name: 🔢 Generate short SHA
+        id: generate_sha
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: 🏷 Set image version
+        id: set_image_version
+        run: |
+          if [ ! -z "${{ env.TAG }}" ]; then
+            echo "image_version=${{ env.TAG }}-${{ env.SHORT_SHA }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "image_version=${{ env.SHORT_SHA }}" >> "${GITHUB_OUTPUT}"
+          fi
+
+    
