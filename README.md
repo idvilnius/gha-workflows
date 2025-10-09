@@ -13,12 +13,12 @@ env:
 jobs:
   GenerateImageVersion:
     name: ID Vilnius Generate Image Version
-    uses: idvilnius/gha-workflows/.github/workflows/image-version.yaml@v1
+    uses: idvilnius/gha-workflows/.github/workflows/image-version.yaml@main
 
   Build:
     name: ID Vilnius Build image
     needs: [GenerateImageVersion]
-    uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@v1
+    uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
     with:
       docker_image: ${{ env.ACR_IMAGE }}
       image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}
@@ -33,7 +33,7 @@ jobs:
   Security:
     name: 🔐 ID Vilnius Security Scan
     needs: [GenerateImageVersion, Build]
-    uses: idvilnius/.github/workflows/security.yaml@v1
+    uses: idvilnius/.github/workflows/security.yaml@main
     with:
       docker_image: ${{ env.ACR_IMAGE }}
       image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}
@@ -42,7 +42,7 @@ jobs:
     name: 📦 ID Vilnius Publish to ACR
     needs: [GenerateImageVersion, Security]
     if: ${{ github.ref == 'refs/heads/staging-sview-infra' }}
-    uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@v1
+    uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
     with:
       docker_image: ${{ env.ACR_IMAGE }}
       image_tag: ${{ needs.GenerateImageVersion.outputs.image_version }}
