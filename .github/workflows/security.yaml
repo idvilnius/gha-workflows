@@ -58,7 +58,7 @@ jobs:
 
       - name: Restore Trivy from cache
         id: cache-trivy
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: trivy
           key: ${{ env.trivy-cache-key }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Cache Trivy after download
         if: steps.cache-trivy.outputs.cache-hit != 'true'
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: trivy
           key: ${{ env.trivy-cache-key }}
