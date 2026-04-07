@@ -2,7 +2,7 @@
 name: Security and License Scan
 
 env:
-  TRIVY_VERSION: 0.56.1
+  TRIVY_VERSION: 0.69.3
 
 on:
   workflow_call:
