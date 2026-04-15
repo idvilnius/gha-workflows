@@ -24,6 +24,9 @@ jobs:
   publish:
     name: 🚀 Publish Docker Image to ACR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: Download Docker Image artifact
         uses: actions/download-artifact@v5
@@ -54,3 +57,19 @@ jobs:
         run: |
           docker image inspect "${{ inputs.docker_image }}:${{ inputs.image_tag }}" >/dev/null
           docker push "${{ inputs.docker_image }}:${{ inputs.image_tag }}"
+
+      - name: Delete docker-image artifact
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          ids=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            | jq -r '.artifacts[] | select(.name=="docker-image") | .id')
+          for id in $ids; do
+            echo "Deleting artifact id=$id"
+            curl -sS -X DELETE -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/actions/artifacts/$id"
+          done

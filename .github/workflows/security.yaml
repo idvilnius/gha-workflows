@@ -96,7 +96,7 @@ jobs:
         with:
           name: vulnerability-report
           path: vulnerability.json
-          retention-days: 5
+          retention-days: 1
 
   license_scan:
     name: 📜 License Scan
@@ -157,7 +157,7 @@ jobs:
         with:
           name: license-report
           path: license.json
-          retention-days: 5
+          retention-days: 1
   
   mock_step:
     name: Mock Step
