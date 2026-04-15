@@ -74,4 +74,4 @@ jobs:
         with:
           name: docker-image
           path: image.tar
-          retention-days: 7
+          retention-days: 1
