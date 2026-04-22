@@ -1,0 +1,144 @@
+name: Bump image tag in a Helm chart
+
+# Reusable workflow that opens (or auto-merges) a PR in a separate Git
+# repository — typically idvilnius/private-charts — updating a single
+# `tag:` field in a chart's values.yaml or envs/*.yaml file.
+#
+# Usage from a caller workflow:
+#
+#   BumpChartTag:
+#     needs: [PublishProd]
+#     uses: idvilnius/gha-workflows/.github/workflows/bump-chart-tag.yaml@main
+#     with:
+#       chart_repo: idvilnius/private-charts
+#       chart_file: charts/schools-internal/values.yaml
+#       yaml_path: app.image.tag            # dot-path to the field to update
+#       new_tag:   ${{ needs.GenerateImageVersion.outputs.image_version }}
+#       branch_prefix: bump-schools-internal
+#       auto_merge: true
+#     secrets:
+#       gh_token: ${{ secrets.CHARTS_REPO_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      chart_repo:
+        description: 'owner/repo holding the chart (e.g. idvilnius/private-charts)'
+        type: string
+        required: true
+      chart_file:
+        description: 'Path to the YAML file to edit, relative to repo root'
+        type: string
+        required: true
+      yaml_path:
+        description: 'Dot-path to the scalar to set (e.g. app.image.tag)'
+        type: string
+        required: true
+      new_tag:
+        description: 'New tag value to write'
+        type: string
+        required: true
+      branch_prefix:
+        description: 'Prefix for the PR branch — the run commit sha is appended'
+        type: string
+        required: false
+        default: 'bump-image-tag'
+      base_branch:
+        description: 'Base branch in the chart repo (PR target)'
+        type: string
+        required: false
+        default: 'main'
+      auto_merge:
+        description: 'Squash-merge the PR automatically after creation'
+        type: boolean
+        required: false
+        default: false
+      commit_author:
+        description: 'Author name used for the commit (user.name)'
+        type: string
+        required: false
+        default: 'idvilnius-ci'
+      commit_email:
+        description: 'Author email used for the commit (user.email)'
+        type: string
+        required: false
+        default: 'ci@idvilnius.lt'
+    secrets:
+      gh_token:
+        description: 'PAT with `contents: write` + `pull_requests: write` on the chart repo'
+        required: true
+
+jobs:
+  bump:
+    name: 🔖 Bump ${{ inputs.yaml_path }} to ${{ inputs.new_tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout chart repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.chart_repo }}
+          token: ${{ secrets.gh_token }}
+          ref: ${{ inputs.base_branch }}
+          fetch-depth: 0
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Detect current tag
+        id: current
+        run: |
+          current=$(yq -r '.${{ inputs.yaml_path }}' '${{ inputs.chart_file }}')
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "Current: ${current}"
+          echo "New:     ${{ inputs.new_tag }}"
+
+      - name: Skip if unchanged
+        if: steps.current.outputs.current == inputs.new_tag
+        run: |
+          echo "::notice::Tag already at ${{ inputs.new_tag }} — nothing to do."
+          exit 0
+
+      - name: Update tag
+        if: steps.current.outputs.current != inputs.new_tag
+        env:
+          NEW_TAG: ${{ inputs.new_tag }}
+          YAML_PATH: ${{ inputs.yaml_path }}
+          CHART_FILE: ${{ inputs.chart_file }}
+        run: |
+          yq -i '.'"${YAML_PATH}"' = strenv(NEW_TAG)' "${CHART_FILE}"
+          echo "--- diff ---"
+          git --no-pager diff -- "${CHART_FILE}"
+
+      - name: Create branch + commit + PR
+        if: steps.current.outputs.current != inputs.new_tag
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
+        run: |
+          set -euo pipefail
+          branch="${{ inputs.branch_prefix }}-${GITHUB_SHA::7}"
+          git config user.name  "${{ inputs.commit_author }}"
+          git config user.email "${{ inputs.commit_email }}"
+          git checkout -b "${branch}"
+          git add -- "${{ inputs.chart_file }}"
+          git commit -m "chore: bump ${{ inputs.yaml_path }} to ${{ inputs.new_tag }}"
+          git push origin "${branch}"
+
+          pr_url=$(gh pr create \
+            --repo "${{ inputs.chart_repo }}" \
+            --base "${{ inputs.base_branch }}" \
+            --head "${branch}" \
+            --title "chore: bump ${{ inputs.chart_file }} → ${{ inputs.new_tag }}" \
+            --body "Automated bump from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY commit ${GITHUB_SHA}.")
+          echo "Opened: ${pr_url}"
+          echo "PR_URL=${pr_url}" >> "$GITHUB_ENV"
+
+      - name: Auto-merge PR
+        if: ${{ inputs.auto_merge && steps.current.outputs.current != inputs.new_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
+        run: |
+          gh pr merge "${PR_URL}" --repo "${{ inputs.chart_repo }}" --squash --auto
