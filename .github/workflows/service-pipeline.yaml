@@ -1,0 +1,121 @@
+# Universal service pipeline:
+#   generate image version → lint → build → scan → publish to ACR → bump chart tag
+#
+# Per-service workflow should be only variables + a single `uses:` call.
+# Example (schools-internal):
+#
+#   jobs:
+#     pipeline:
+#       uses: idvilnius/gha-workflows/.github/workflows/service-pipeline.yaml@main
+#       with:
+#         acr_image:     cr0shared.azurecr.io/schools-internal
+#         chart_file:    charts/schools-internal/values.yaml
+#         branch_prefix: bump-schools-internal
+#       secrets: inherit
+#
+# The caller's repo must expose these secrets (inherited):
+#   ACR_USERNAME, ACR_PASSWORD, CHARTS_REPO_TOKEN
+
+name: Service pipeline
+
+on:
+  workflow_call:
+    inputs:
+      acr_image:
+        description: 'Full ACR image name without tag (e.g. cr0shared.azurecr.io/schools-internal)'
+        type: string
+        required: true
+      chart_file:
+        description: 'Path in the chart repo to the values file to bump'
+        type: string
+        required: true
+      branch_prefix:
+        description: 'PR branch prefix in the chart repo'
+        type: string
+        required: true
+      chart_repo:
+        description: 'owner/repo of the Helm chart repo'
+        type: string
+        required: false
+        default: 'idvilnius/private-charts'
+      yaml_path:
+        description: 'Dot-path inside the values file to update'
+        type: string
+        required: false
+        default: 'app.image.tag'
+      auto_merge:
+        description: 'Auto-merge the bump PR'
+        type: boolean
+        required: false
+        default: false
+      lint_step:
+        description: 'Shell run by the lint job. Default assumes pnpm + format:check/lint/typecheck scripts.'
+        type: string
+        required: false
+        default: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm format:check
+          pnpm lint
+          pnpm typecheck
+      test_step:
+        description: 'Shell run by the test job. Default is a no-op (DB-bound tests belong in a separate workflow).'
+        type: string
+        required: false
+        default: 'echo "Tests run locally or in a separate workflow."'
+      build_step:
+        description: 'Shell run by the build job. Default is `docker build -t <acr_image>:<tag> .`'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  ImageVersion:
+    name: 🏷 Image version
+    uses: idvilnius/gha-workflows/.github/workflows/image-version.yaml@main
+
+  Build:
+    name: 🧪 Lint, test, build
+    needs: [ImageVersion]
+    uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
+    with:
+      docker_image: ${{ inputs.acr_image }}
+      image_tag: ${{ needs.ImageVersion.outputs.image_version }}
+      lint_step: ${{ inputs.lint_step }}
+      test_step: ${{ inputs.test_step }}
+      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image, needs.ImageVersion.outputs.image_version) }}
+
+  Security:
+    name: 🔐 Security scan
+    needs: [ImageVersion, Build]
+    uses: idvilnius/gha-workflows/.github/workflows/security.yaml@main
+    with:
+      docker_image: ${{ inputs.acr_image }}
+      image_tag: ${{ needs.ImageVersion.outputs.image_version }}
+
+  Publish:
+    name: 📦 Publish to ACR
+    needs: [ImageVersion, Security]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
+    with:
+      docker_image: ${{ inputs.acr_image }}
+      image_tag: ${{ needs.ImageVersion.outputs.image_version }}
+    secrets:
+      acr_username: ${{ secrets.ACR_USERNAME }}
+      acr_password: ${{ secrets.ACR_PASSWORD }}
+
+  BumpChartTag:
+    name: 🔖 Bump chart tag
+    needs: [ImageVersion, Publish]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: idvilnius/gha-workflows/.github/workflows/bump-chart-tag.yaml@main
+    with:
+      chart_repo: ${{ inputs.chart_repo }}
+      chart_file: ${{ inputs.chart_file }}
+      yaml_path: ${{ inputs.yaml_path }}
+      new_tag: ${{ needs.ImageVersion.outputs.image_version }}
+      branch_prefix: ${{ inputs.branch_prefix }}
+      auto_merge: ${{ inputs.auto_merge }}
+    secrets:
+      gh_token: ${{ secrets.CHARTS_REPO_TOKEN }}
