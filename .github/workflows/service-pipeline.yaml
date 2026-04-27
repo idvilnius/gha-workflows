@@ -276,11 +276,13 @@ jobs:
             until your first \`dev\` branch push).
           - DNS: ops needs to add \`<host> A 46.255.213.19\` in Cloudflare and
             internal Neptunas.vplanas.lt — three hostnames per service.
-          - Pull secrets only needed for the on-prem idvilnius cluster
-            (AKS uses node managed identity for cr0test auth — no
-            pod-level secret needed for the dev env):
-            - \`$NAME-stg\`, \`$NAME-prod\` → copy \`acr-cr0shared\`
-              from \`default\` namespace on idvilnius cluster.
+          - ACR pull secrets are auto-replicated cluster-wide:
+            - **on-prem idvilnius**: kubernetes-reflector mirrors
+              \`default/acr-cr0shared\` into every new namespace.
+            - **AKS clusters** (dev/test): node managed identity
+              authenticates to ACR — no per-namespace secret needed.
+
+            Nothing manual to do here.
           "
 
           echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
