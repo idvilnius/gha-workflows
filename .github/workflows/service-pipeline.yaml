@@ -257,12 +257,11 @@ jobs:
             until your first \`dev\` branch push).
           - DNS: ops needs to add \`<host> A 46.255.213.19\` in Cloudflare and
             internal Neptunas.vplanas.lt — three hostnames per service.
-          - Pull secrets needed in each new namespace (one-time per ns):
-            - \`$NAME-stg\`, \`$NAME-prod\` (idvilnius cluster) → copy
-              \`acr-cr0shared\` from \`default\` namespace.
-            - \`$NAME-dev\` (aks-test-001 cluster) → copy
-              \`acr-cr0test\` from \`default\` namespace (ops must
-              ensure this exists; it pulls from \`cr0test.azurecr.io\`).
+          - Pull secrets only needed for the on-prem idvilnius cluster
+            (AKS uses node managed identity for cr0test auth — no
+            pod-level secret needed for the dev env):
+            - \`$NAME-stg\`, \`$NAME-prod\` → copy \`acr-cr0shared\`
+              from \`default\` namespace on idvilnius cluster.
           "
 
           echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
