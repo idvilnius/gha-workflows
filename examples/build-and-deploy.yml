@@ -6,16 +6,19 @@
 #
 # Required repo secrets (ask ops to paste them; reused across all idvilnius
 # services):
-#   ACR_USERNAME, ACR_PASSWORD, CHARTS_REPO_TOKEN
+#   ACR_USERNAME,      ACR_PASSWORD       — for cr0shared.azurecr.io  (stg, prod)
+#   ACR_TEST_USERNAME, ACR_TEST_PASSWORD  — for cr0test.azurecr.io    (dev, test)
+#   CHARTS_REPO_TOKEN                     — PAT with contents:write + pull_requests:write
+#                                           on idvilnius/private-charts
 #
 # What happens on each event:
-#   push to `dev`         → builds, scans, publishes, bumps envs/dev-values.yaml
-#   push to `main`        → builds, scans, publishes, bumps envs/stg-values.yaml
-#                           (or, on the very first run when the chart doesn't
-#                            exist yet, opens a `feat: bootstrap <repo>` PR
-#                            in idvilnius/private-charts with the chart skeleton)
-#   GitHub release        → builds, scans, publishes, bumps envs/prod-values.yaml
-#   pull_request          → builds + scans only (no publish, no bump)
+#   push to `dev`     → publishes to cr0test.azurecr.io, bumps envs/dev-values.yaml
+#   push to `main`    → publishes to cr0shared.azurecr.io, bumps envs/stg-values.yaml
+#                       (or, on the very first run when the chart doesn't exist
+#                        yet, opens a `feat: bootstrap <repo>` PR in
+#                        idvilnius/private-charts with the chart skeleton)
+#   GitHub release    → publishes to cr0shared.azurecr.io, bumps envs/prod-values.yaml
+#   pull_request      → builds + scans only (no publish, no bump)
 
 name: build-and-deploy
 

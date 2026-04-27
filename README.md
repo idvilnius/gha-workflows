@@ -9,11 +9,16 @@ repos. Caller workflows invoke them with
 **Copy [`examples/build-and-deploy.yml`](examples/build-and-deploy.yml) into your repo as `.github/workflows/build-and-deploy.yml` — verbatim, no values to edit.**
 
 That single file wires up the entire `service-pipeline.yaml` orchestrator
-below. Then set three repo secrets (ask ops to paste them):
+below. Then set five repo secrets (ask ops to paste them — values are
+shared across all idvilnius services):
 
-- `ACR_USERNAME`
-- `ACR_PASSWORD`
-- `CHARTS_REPO_TOKEN`
+| Secret              | Used for                                      |
+| ------------------- | --------------------------------------------- |
+| `ACR_USERNAME`      | `cr0shared.azurecr.io` push (stg, prod)       |
+| `ACR_PASSWORD`      | `cr0shared.azurecr.io` push (stg, prod)       |
+| `ACR_TEST_USERNAME` | `cr0test.azurecr.io` push (dev, future test)  |
+| `ACR_TEST_PASSWORD` | `cr0test.azurecr.io` push (dev, future test)  |
+| `CHARTS_REPO_TOKEN` | PR write on `idvilnius/private-charts`        |
 
 Push to `main`. On the very first run the pipeline auto-generates a
 chart skeleton in `idvilnius/private-charts` and opens a `feat: bootstrap
@@ -37,12 +42,17 @@ See individual files for the full input/secret schema.
 
 ## How `service-pipeline.yaml` routes events
 
-| Event                                    | Bumps                                       |
-| ---------------------------------------- | ------------------------------------------- |
-| push to `dev` branch                     | `charts/<repo>/envs/dev-values.yaml`        |
-| push to `main` branch                    | `charts/<repo>/envs/stg-values.yaml`        |
-| GitHub `release` (publish a tag)         | `charts/<repo>/envs/prod-values.yaml`       |
-| `pull_request`                           | builds + scans only (no publish, no bump)   |
+| Event                            | Pushes image to       | Bumps values file                     |
+| -------------------------------- | --------------------- | ------------------------------------- |
+| push to `dev` branch             | `cr0test.azurecr.io`  | `charts/<repo>/envs/dev-values.yaml`  |
+| push to `main` branch            | `cr0shared.azurecr.io`| `charts/<repo>/envs/stg-values.yaml`  |
+| GitHub `release` (publish a tag) | `cr0shared.azurecr.io`| `charts/<repo>/envs/prod-values.yaml` |
+| `pull_request`                   | (no push)             | (no bump — builds + scans only)       |
+
+The chart's env values files hardcode the matching `image.repository`
+(env `dev` and `test` → `cr0test.azurecr.io/<repo>`; env `stg` and
+`prod` → `cr0shared.azurecr.io/<repo>`), so the same image tag exists
+in different registries depending on which branch built it.
 
 On the **first push to `main`** when `charts/<repo>/` does not yet exist
 in the chart repo, the pipeline copies `charts/.template/` from

@@ -18,13 +18,15 @@
 #       uses: idvilnius/gha-workflows/.github/workflows/service-pipeline.yaml@main
 #       secrets: inherit
 #
-# Branch / event → env file bumped:
-#   - push to `dev`         → charts/<repo>/envs/dev-values.yaml
-#   - push to `main`        → charts/<repo>/envs/stg-values.yaml
-#   - GitHub `release`      → charts/<repo>/envs/prod-values.yaml
+# Branch / event → env file bumped + ACR routing:
+#   - push to `dev`         → charts/<repo>/envs/dev-values.yaml,  cr0test.azurecr.io
+#   - push to `main`        → charts/<repo>/envs/stg-values.yaml,  cr0shared.azurecr.io
+#   - GitHub `release`      → charts/<repo>/envs/prod-values.yaml, cr0shared.azurecr.io
 #
-# The caller's repo must expose three secrets (inherited):
-#   ACR_USERNAME, ACR_PASSWORD, CHARTS_REPO_TOKEN
+# The caller's repo must expose five secrets (inherited):
+#   ACR_USERNAME,      ACR_PASSWORD       — for cr0shared.azurecr.io (stg, prod)
+#   ACR_TEST_USERNAME, ACR_TEST_PASSWORD  — for cr0test.azurecr.io (dev, test)
+#   CHARTS_REPO_TOKEN                     — PAT with contents:write + pull_requests:write on the chart repo
 
 name: Service pipeline
 
@@ -91,18 +93,18 @@ jobs:
     needs: [ImageVersion]
     uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name) }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
       lint_step: ${{ inputs.lint_step }}
       test_step: ${{ inputs.test_step }}
-      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name), needs.ImageVersion.outputs.image_version) }}
+      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name), needs.ImageVersion.outputs.image_version) }}
 
   Security:
     name: 🔐 Security scan
     needs: [ImageVersion, Build]
     uses: idvilnius/gha-workflows/.github/workflows/security.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name) }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
 
   Publish:
@@ -111,11 +113,11 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
     uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name) }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
     secrets:
-      acr_username: ${{ secrets.ACR_USERNAME }}
-      acr_password: ${{ secrets.ACR_PASSWORD }}
+      acr_username: ${{ github.ref == 'refs/heads/dev' && secrets.ACR_TEST_USERNAME || secrets.ACR_USERNAME }}
+      acr_password: ${{ github.ref == 'refs/heads/dev' && secrets.ACR_TEST_PASSWORD || secrets.ACR_PASSWORD }}
 
   EnsureChart:
     name: 🌱 Bootstrap chart if missing
@@ -236,15 +238,31 @@ jobs:
           And in each \`envs/*-values.yaml\`:
           - \`app.ingress.hosts[0].host\` — the public hostname for that env
 
+          ## ACR routing (already wired in env files)
+          - \`envs/stg-values.yaml\` and \`envs/prod-values.yaml\` →
+            \`cr0shared.azurecr.io/$NAME\`
+          - \`envs/dev-values.yaml\` and \`envs/test-values.yaml\` →
+            \`cr0test.azurecr.io/$NAME\`
+
+          The bootstrap build runs on \`main\`, so the first image tag
+          (\`$TAG\`) is in **cr0shared**. It is pre-filled in all three env
+          files, but the dev pod will ImagePullBackOff until you push to
+          the \`dev\` branch (which will publish \`$NAME:<sha>\` to
+          cr0test). That is expected.
+
           ## After merging
           - **AutoSync is enabled** for all 3 ArgoCD Applications. Pods will create
             namespaces and try to start immediately. They will be Pending or
-            CrashLoop until you fill values + KV secrets.
-          - First image tag (\`$TAG\`) is already pre-filled in all three env files.
+            CrashLoop until you fill values + KV secrets (and, for dev,
+            until your first \`dev\` branch push).
           - DNS: ops needs to add \`<host> A 46.255.213.19\` in Cloudflare and
-            internal Neptunas.vplanas.lt.
-          - \`acr-cr0shared\` pull secret needs to be copied into each new namespace
-            (\`$NAME-{dev,stg,prod}\`). One-time per namespace.
+            internal Neptunas.vplanas.lt — three hostnames per service.
+          - Pull secrets needed in each new namespace (one-time per ns):
+            - \`$NAME-stg\`, \`$NAME-prod\` (idvilnius cluster) → copy
+              \`acr-cr0shared\` from \`default\` namespace.
+            - \`$NAME-dev\` (aks-test-001 cluster) → copy
+              \`acr-cr0test\` from \`default\` namespace (ops must
+              ensure this exists; it pulls from \`cr0test.azurecr.io\`).
           "
 
           echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
