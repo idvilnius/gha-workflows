@@ -1,19 +1,29 @@
 # Universal service pipeline:
-#   generate image version → lint → build → scan → publish to ACR → bump chart tag
+#   image-version → lint → build → security scan → publish to ACR
+#   → bootstrap chart in private-charts (if first run)
+#   → bump tag in the env-specific values file (if chart already exists)
 #
-# Per-service workflow should be only variables + a single `uses:` call.
-# Example (schools-internal):
+# Per-service workflow has zero variables — everything is derived from
+# `${{ github.event.repository.name }}`. Drop this in a new repo:
 #
+#   name: build-and-deploy
+#   on:
+#     push:
+#       branches: [main, dev]
+#     release:
+#       types: [published]
+#     pull_request: {}
 #   jobs:
 #     pipeline:
 #       uses: idvilnius/gha-workflows/.github/workflows/service-pipeline.yaml@main
-#       with:
-#         acr_image:     cr0shared.azurecr.io/schools-internal
-#         chart_file:    charts/schools-internal/values.yaml
-#         branch_prefix: bump-schools-internal
 #       secrets: inherit
 #
-# The caller's repo must expose these secrets (inherited):
+# Branch / event → env file bumped:
+#   - push to `dev`         → charts/<repo>/envs/dev-values.yaml
+#   - push to `main`        → charts/<repo>/envs/stg-values.yaml
+#   - GitHub `release`      → charts/<repo>/envs/prod-values.yaml
+#
+# The caller's repo must expose three secrets (inherited):
 #   ACR_USERNAME, ACR_PASSWORD, CHARTS_REPO_TOKEN
 
 name: Service pipeline
@@ -21,33 +31,35 @@ name: Service pipeline
 on:
   workflow_call:
     inputs:
-      acr_image:
-        description: 'Full ACR image name without tag (e.g. cr0shared.azurecr.io/schools-internal)'
-        type: string
-        required: true
-      chart_file:
-        description: 'Path in the chart repo to the values file to bump'
-        type: string
-        required: true
-      branch_prefix:
-        description: 'PR branch prefix in the chart repo'
-        type: string
-        required: true
+      auto_merge:
+        description: 'Auto-merge the bump PR (does not apply to bootstrap PR)'
+        type: boolean
+        required: false
+        default: false
       chart_repo:
         description: 'owner/repo of the Helm chart repo'
         type: string
         required: false
         default: 'idvilnius/private-charts'
-      yaml_path:
-        description: 'Dot-path inside the values file to update'
+      # ── Legacy single-env knobs (e.g. schools-internal) ────────────────
+      # New services should leave these empty; the env-specific file is
+      # derived from the branch/event. Provide ONLY if you have a single
+      # env chart with a hand-picked path different from the default.
+      acr_image:
+        description: '(Legacy) Override ACR image. Default: cr0shared.azurecr.io/<repo>'
         type: string
         required: false
-        default: 'app.image.tag'
-      auto_merge:
-        description: 'Auto-merge the bump PR'
-        type: boolean
+        default: ''
+      chart_file:
+        description: '(Legacy) Override values file to bump. Default: charts/<repo>/envs/{branch}-values.yaml'
+        type: string
         required: false
-        default: false
+        default: ''
+      branch_prefix:
+        description: '(Legacy) Override bump-PR branch prefix.'
+        type: string
+        required: false
+        default: ''
       lint_step:
         description: 'Shell run by the lint job. Default assumes pnpm + format:check/lint/typecheck scripts.'
         type: string
@@ -64,7 +76,7 @@ on:
         required: false
         default: 'echo "Tests run locally or in a separate workflow."'
       build_step:
-        description: 'Shell run by the build job. Default is `docker build -t <acr_image>:<tag> .`'
+        description: 'Shell run by the build job. Default is `docker build -t cr0shared.azurecr.io/<repo>:<tag> .`'
         type: string
         required: false
         default: ''
@@ -79,43 +91,189 @@ jobs:
     needs: [ImageVersion]
     uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
       lint_step: ${{ inputs.lint_step }}
       test_step: ${{ inputs.test_step }}
-      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image, needs.ImageVersion.outputs.image_version) }}
+      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name), needs.ImageVersion.outputs.image_version) }}
 
   Security:
     name: 🔐 Security scan
     needs: [ImageVersion, Build]
     uses: idvilnius/gha-workflows/.github/workflows/security.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
 
   Publish:
     name: 📦 Publish to ACR
     needs: [ImageVersion, Security]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
     uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('cr0shared.azurecr.io/{0}', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
     secrets:
       acr_username: ${{ secrets.ACR_USERNAME }}
       acr_password: ${{ secrets.ACR_PASSWORD }}
 
+  EnsureChart:
+    name: 🌱 Bootstrap chart if missing
+    needs: [ImageVersion, Publish]
+    if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    outputs:
+      bootstrapped: ${{ steps.bootstrap.outputs.bootstrapped }}
+    steps:
+      - name: Checkout chart repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.chart_repo }}
+          token: ${{ secrets.CHARTS_REPO_TOKEN }}
+          fetch-depth: 0
+
+      - name: Bootstrap if missing
+        id: bootstrap
+        env:
+          GH_TOKEN: ${{ secrets.CHARTS_REPO_TOKEN }}
+          NAME: ${{ github.event.repository.name }}
+          TAG: ${{ needs.ImageVersion.outputs.image_version }}
+          CHART_REPO: ${{ inputs.chart_repo }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -d "charts/$NAME" ]; then
+            echo "Chart charts/$NAME already exists; skipping bootstrap."
+            echo "bootstrapped=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Bootstrap only on push to main. On `dev` or `release` without a
+          # chart, fail with a clear message instead of silently doing nothing.
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::No chart at charts/$NAME and current ref ($REF) is not refs/heads/main. Push to main first to bootstrap the chart, then dev / release flows will work." >&2
+            exit 1
+          fi
+
+          if [ ! -d "charts/.template" ]; then
+            echo "::error::charts/.template not found in $CHART_REPO. Cannot bootstrap." >&2
+            exit 1
+          fi
+
+          # kebab-case → camelCase: foo-api → fooApi
+          CAMEL=$(echo "$NAME" | sed -E 's/-([a-z0-9])/\U\1/g')
+          echo "Bootstrapping chart for '$NAME' (camelCase: '$CAMEL', first tag: '$TAG')"
+
+          # 1. Copy chart skeleton
+          mkdir -p "charts/$NAME/envs"
+          cp charts/.template/Chart.yaml  "charts/$NAME/Chart.yaml"
+          cp charts/.template/values.yaml "charts/$NAME/values.yaml"
+          for env in dev stg prod test; do
+            cp "charts/.template/envs/${env}-values.yaml" "charts/$NAME/envs/${env}-values.yaml"
+          done
+
+          # 2. Copy ArgoCD Application templates (one per env)
+          for env in dev stg prod; do
+            cp "charts/.template/applications/__NAME__-${env}-application.yaml" \
+               "applications/app-of-apps/templates/${NAME}-${env}-application.yaml"
+          done
+
+          # 3. Append the three values entries (Dev/Stg/Prod) to app-of-apps values.yaml
+          printf '\n' >> applications/app-of-apps/values.yaml
+          cat charts/.template/applications/app-of-apps-values-snippet.yaml \
+            >> applications/app-of-apps/values.yaml
+
+          # 4. Substitute placeholders in every newly-touched file
+          targets=(
+            "charts/$NAME/Chart.yaml"
+            "charts/$NAME/values.yaml"
+            "charts/$NAME/envs/dev-values.yaml"
+            "charts/$NAME/envs/stg-values.yaml"
+            "charts/$NAME/envs/prod-values.yaml"
+            "charts/$NAME/envs/test-values.yaml"
+            "applications/app-of-apps/templates/${NAME}-dev-application.yaml"
+            "applications/app-of-apps/templates/${NAME}-stg-application.yaml"
+            "applications/app-of-apps/templates/${NAME}-prod-application.yaml"
+            "applications/app-of-apps/values.yaml"
+          )
+          for f in "${targets[@]}"; do
+            sed -i \
+              -e "s|__NAME__|$NAME|g" \
+              -e "s|__CAMEL_NAME__|$CAMEL|g" \
+              -e "s|__FIRST_TAG__|$TAG|g" \
+              "$f"
+          done
+
+          # 5. Open the bootstrap PR
+          BRANCH="bootstrap-$NAME-${GITHUB_SHA::7}"
+          git config user.name  "idvilnius-ci"
+          git config user.email "ci@idvilnius.lt"
+          git checkout -b "$BRANCH"
+          git add "charts/$NAME" "applications/app-of-apps"
+          git commit -m "feat: bootstrap $NAME chart"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --repo "$CHART_REPO" \
+            --base main \
+            --head "$BRANCH" \
+            --title "feat: bootstrap $NAME chart" \
+            --body "Auto-generated chart skeleton for **$NAME**.
+
+          ## Files added
+          - \`charts/$NAME/\` — Chart.yaml, values.yaml, envs/{dev,stg,prod,test}-values.yaml
+          - \`applications/app-of-apps/templates/$NAME-{dev,stg,prod}-application.yaml\` — ArgoCD Applications
+          - \`applications/app-of-apps/values.yaml\` — appended ${CAMEL}{Dev,Stg,Prod} entries
+
+          ## What to fill before merging
+          Look at \`charts/$NAME/values.yaml\` for placeholders that need real values:
+          - \`app.containerPort\` — the port your container actually listens on
+          - \`app.env\` — non-secret env vars (URLs, feature flags)
+          - \`app.externalSecret.keys\` — env-var-name → KV-secret-name mapping (also create the KV secrets in \`kv-idvilnius-shared\`)
+          - \`app.persistence\` (optional) — uncomment if you need a PVC. **If you do, also uncomment \`app.updateStrategy: Recreate\`** — RollingUpdate deadlocks on RWO PVCs.
+
+          And in each \`envs/*-values.yaml\`:
+          - \`app.ingress.hosts[0].host\` — the public hostname for that env
+
+          ## After merging
+          - **AutoSync is enabled** for all 3 ArgoCD Applications. Pods will create
+            namespaces and try to start immediately. They will be Pending or
+            CrashLoop until you fill values + KV secrets.
+          - First image tag (\`$TAG\`) is already pre-filled in all three env files.
+          - DNS: ops needs to add \`<host> A 46.255.213.19\` in Cloudflare and
+            internal Neptunas.vplanas.lt.
+          - \`acr-cr0shared\` pull secret needs to be copied into each new namespace
+            (\`$NAME-{dev,stg,prod}\`). One-time per namespace.
+          "
+
+          echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
+
   BumpChartTag:
     name: 🔖 Bump chart tag
-    needs: [ImageVersion, Publish]
-    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: [ImageVersion, Publish, EnsureChart]
+    # Run only when:
+    #  - Publish succeeded (image is in ACR), AND
+    #  - EnsureChart did not just bootstrap (the bootstrap PR already
+    #    carries the tag; bumping again would race with it). When
+    #    EnsureChart was skipped (push to dev / release event), result is
+    #    'skipped' and bootstrapped is empty — we still want to bump.
+    if: |
+      always() &&
+      needs.Publish.result == 'success' &&
+      (needs.EnsureChart.result == 'success' || needs.EnsureChart.result == 'skipped') &&
+      needs.EnsureChart.outputs.bootstrapped != 'true' &&
+      (
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        github.event_name == 'release'
+      )
     uses: idvilnius/gha-workflows/.github/workflows/bump-chart-tag.yaml@main
     with:
       chart_repo: ${{ inputs.chart_repo }}
-      chart_file: ${{ inputs.chart_file }}
-      yaml_path: ${{ inputs.yaml_path }}
+      chart_file: ${{ inputs.chart_file != '' && inputs.chart_file || format('charts/{0}/envs/{1}-values.yaml', github.event.repository.name, github.event_name == 'release' && 'prod' || (github.ref == 'refs/heads/main' && 'stg' || 'dev')) }}
+      yaml_path: app.image.tag
       new_tag: ${{ needs.ImageVersion.outputs.image_version }}
-      branch_prefix: ${{ inputs.branch_prefix }}
+      branch_prefix: ${{ inputs.branch_prefix != '' && inputs.branch_prefix || format('bump-{0}-{1}', github.event.repository.name, github.event_name == 'release' && 'prod' || (github.ref == 'refs/heads/main' && 'stg' || 'dev')) }}
       auto_merge: ${{ inputs.auto_merge }}
     secrets:
       gh_token: ${{ secrets.CHARTS_REPO_TOKEN }}
