@@ -163,9 +163,15 @@ jobs:
             exit 1
           fi
 
-          # kebab-case → camelCase: foo-api → fooApi
-          CAMEL=$(echo "$NAME" | sed -E 's/-([a-z0-9])/\U\1/g')
-          echo "Bootstrapping chart for '$NAME' (camelCase: '$CAMEL', first tag: '$TAG')"
+          # K8s-safe name: replace underscores with hyphens (DNS-1123 forbids _)
+          # so K8s objects (namespace, Application, Deployment, Service, secrets)
+          # and ingress hostnames stay valid even when the GitHub repo name
+          # contains underscores. ACR image and chart dir keep the raw NAME.
+          K8S_NAME="${NAME//_/-}"
+
+          # kebab-case → camelCase: foo-bar → fooBar
+          CAMEL=$(echo "$K8S_NAME" | sed -E 's/-([a-z0-9])/\U\1/g')
+          echo "Bootstrapping chart for '$NAME' (k8s name: '$K8S_NAME', camelCase: '$CAMEL', first tag: '$TAG')"
 
           # 1. Copy chart skeleton
           mkdir -p "charts/$NAME/envs"
@@ -200,9 +206,12 @@ jobs:
             "applications/app-of-apps/values.yaml"
           )
           for f in "${targets[@]}"; do
+            # Order matters: substitute __K8S_NAME__ and __CAMEL_NAME__ before
+            # __NAME__ so the latter doesn't accidentally swallow them.
             sed -i \
-              -e "s|__NAME__|$NAME|g" \
+              -e "s|__K8S_NAME__|$K8S_NAME|g" \
               -e "s|__CAMEL_NAME__|$CAMEL|g" \
+              -e "s|__NAME__|$NAME|g" \
               -e "s|__FIRST_TAG__|$TAG|g" \
               "$f"
           done
