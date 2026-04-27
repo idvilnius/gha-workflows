@@ -1,0 +1,32 @@
+# Drop this file into a new idvilnius service repo at:
+#   .github/workflows/build-and-deploy.yml
+#
+# No values to edit — the pipeline derives the chart name, ACR image,
+# bump-target file, and PR branch prefix from `${{ github.event.repository.name }}`.
+#
+# Required repo secrets (ask ops to paste them; reused across all idvilnius
+# services):
+#   ACR_USERNAME, ACR_PASSWORD, CHARTS_REPO_TOKEN
+#
+# What happens on each event:
+#   push to `dev`         → builds, scans, publishes, bumps envs/dev-values.yaml
+#   push to `main`        → builds, scans, publishes, bumps envs/stg-values.yaml
+#                           (or, on the very first run when the chart doesn't
+#                            exist yet, opens a `feat: bootstrap <repo>` PR
+#                            in idvilnius/private-charts with the chart skeleton)
+#   GitHub release        → builds, scans, publishes, bumps envs/prod-values.yaml
+#   pull_request          → builds + scans only (no publish, no bump)
+
+name: build-and-deploy
+
+on:
+  push:
+    branches: [main, dev]
+  release:
+    types: [published]
+  pull_request: {}
+
+jobs:
+  pipeline:
+    uses: idvilnius/gha-workflows/.github/workflows/service-pipeline.yaml@main
+    secrets: inherit
