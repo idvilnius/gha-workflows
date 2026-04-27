@@ -181,15 +181,24 @@ jobs:
             cp "charts/.template/envs/${env}-values.yaml" "charts/$NAME/envs/${env}-values.yaml"
           done
 
-          # 2. Copy ArgoCD Application templates (one per env)
-          for env in dev stg prod; do
-            cp "charts/.template/applications/__NAME__-${env}-application.yaml" \
+          # 2. ArgoCD Applications split between two app-of-apps charts:
+          #    dev/test envs → app-of-apps-test (drives aks-test-001)
+          #    stg/prod envs → app-of-apps     (drives idvilnius on-prem)
+
+          # Test app-of-apps: dev env
+          cp "charts/.template/applications/test/__NAME__-dev-application.yaml" \
+             "applications/app-of-apps-test/templates/${NAME}-dev-application.yaml"
+          printf '\n' >> applications/app-of-apps-test/values.yaml
+          cat charts/.template/applications/test/app-of-apps-values-snippet.yaml \
+            >> applications/app-of-apps-test/values.yaml
+
+          # Prod app-of-apps: stg + prod envs
+          for env in stg prod; do
+            cp "charts/.template/applications/prod/__NAME__-${env}-application.yaml" \
                "applications/app-of-apps/templates/${NAME}-${env}-application.yaml"
           done
-
-          # 3. Append the three values entries (Dev/Stg/Prod) to app-of-apps values.yaml
           printf '\n' >> applications/app-of-apps/values.yaml
-          cat charts/.template/applications/app-of-apps-values-snippet.yaml \
+          cat charts/.template/applications/prod/app-of-apps-values-snippet.yaml \
             >> applications/app-of-apps/values.yaml
 
           # 4. Substitute placeholders in every newly-touched file
@@ -200,7 +209,8 @@ jobs:
             "charts/$NAME/envs/stg-values.yaml"
             "charts/$NAME/envs/prod-values.yaml"
             "charts/$NAME/envs/test-values.yaml"
-            "applications/app-of-apps/templates/${NAME}-dev-application.yaml"
+            "applications/app-of-apps-test/templates/${NAME}-dev-application.yaml"
+            "applications/app-of-apps-test/values.yaml"
             "applications/app-of-apps/templates/${NAME}-stg-application.yaml"
             "applications/app-of-apps/templates/${NAME}-prod-application.yaml"
             "applications/app-of-apps/values.yaml"
@@ -221,7 +231,7 @@ jobs:
           git config user.name  "idvilnius-ci"
           git config user.email "ci@idvilnius.lt"
           git checkout -b "$BRANCH"
-          git add "charts/$NAME" "applications/app-of-apps"
+          git add "charts/$NAME" "applications/app-of-apps" "applications/app-of-apps-test"
           git commit -m "feat: bootstrap $NAME chart"
           git push origin "$BRANCH"
 
