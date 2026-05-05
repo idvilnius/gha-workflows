@@ -1,8 +1,13 @@
 name: Bump image tag in a Helm chart
 
-# Reusable workflow that opens (or auto-merges) a PR in a separate Git
-# repository — typically idvilnius/private-charts — updating a single
-# `tag:` field in a chart's values.yaml or envs/*.yaml file.
+# Reusable workflow that bumps a single `tag:` field in a chart file in
+# a separate Git repository (typically idvilnius/private-charts).
+#
+# Two modes:
+#   - auto_merge: false (default) — opens a PR for human review.
+#   - auto_merge: true            — commits + pushes directly to base_branch
+#                                   (skips PR). Required on GitHub free plans
+#                                   where `gh pr merge --auto` is not enabled.
 #
 # Usage from a caller workflow:
 #
@@ -49,7 +54,7 @@ on:
         required: false
         default: 'main'
       auto_merge:
-        description: 'Squash-merge the PR automatically after creation'
+        description: 'If true, commit + push directly to base_branch (no PR). If false, open a PR.'
         type: boolean
         required: false
         default: false
@@ -113,8 +118,31 @@ jobs:
           echo "--- diff ---"
           git --no-pager diff -- "${CHART_FILE}"
 
+      - name: Direct commit to base branch
+        if: ${{ inputs.auto_merge && steps.current.outputs.current != inputs.new_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.gh_token }}
+        run: |
+          set -euo pipefail
+          git config user.name  "${{ inputs.commit_author }}"
+          git config user.email "${{ inputs.commit_email }}"
+          git add -- "${{ inputs.chart_file }}"
+          git commit -m "chore: bump ${{ inputs.yaml_path }} to ${{ inputs.new_tag }}"
+          # Retry with rebase on non-fast-forward in case of concurrent bumps.
+          for i in 1 2 3 4 5; do
+            if git push origin "HEAD:${{ inputs.base_branch }}"; then
+              echo "Pushed directly to ${{ inputs.base_branch }}"
+              exit 0
+            fi
+            echo "::warning::push failed (attempt $i/5) — fetching and rebasing"
+            git fetch origin "${{ inputs.base_branch }}"
+            git rebase "origin/${{ inputs.base_branch }}"
+          done
+          echo "::error::Failed to push after 5 retries"
+          exit 1
+
       - name: Create branch + commit + PR
-        if: steps.current.outputs.current != inputs.new_tag
+        if: ${{ !inputs.auto_merge && steps.current.outputs.current != inputs.new_tag }}
         env:
           GH_TOKEN: ${{ secrets.gh_token }}
         run: |
@@ -134,11 +162,3 @@ jobs:
             --title "chore: bump ${{ inputs.chart_file }} → ${{ inputs.new_tag }}" \
             --body "Automated bump from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY commit ${GITHUB_SHA}.")
           echo "Opened: ${pr_url}"
-          echo "PR_URL=${pr_url}" >> "$GITHUB_ENV"
-
-      - name: Auto-merge PR
-        if: ${{ inputs.auto_merge && steps.current.outputs.current != inputs.new_tag }}
-        env:
-          GH_TOKEN: ${{ secrets.gh_token }}
-        run: |
-          gh pr merge "${PR_URL}" --repo "${{ inputs.chart_repo }}" --squash --auto
