@@ -185,21 +185,21 @@ jobs:
           done
 
           # 2. ArgoCD Applications split between two app-of-apps charts:
-          #    dev/test envs → app-of-apps-test (drives aks-test-001)
-          #    stg/prod envs → app-of-apps     (drives idvilnius on-prem)
+          #    dev + stg envs → app-of-apps-test (drives aks-test-001)
+          #    prod env       → app-of-apps      (drives idvilnius on-prem)
 
-          # Test app-of-apps: dev env
-          cp "charts/.template/applications/test/__NAME__-dev-application.yaml" \
-             "applications/app-of-apps-test/templates/${NAME}-dev-application.yaml"
+          # Test app-of-apps: dev + stg envs
+          for env in dev stg; do
+            cp "charts/.template/applications/test/__NAME__-${env}-application.yaml" \
+               "applications/app-of-apps-test/templates/${NAME}-${env}-application.yaml"
+          done
           printf '\n' >> applications/app-of-apps-test/values.yaml
           cat charts/.template/applications/test/app-of-apps-values-snippet.yaml \
             >> applications/app-of-apps-test/values.yaml
 
-          # Prod app-of-apps: stg + prod envs
-          for env in stg prod; do
-            cp "charts/.template/applications/prod/__NAME__-${env}-application.yaml" \
-               "applications/app-of-apps/templates/${NAME}-${env}-application.yaml"
-          done
+          # Prod app-of-apps: prod env only
+          cp "charts/.template/applications/prod/__NAME__-prod-application.yaml" \
+             "applications/app-of-apps/templates/${NAME}-prod-application.yaml"
           printf '\n' >> applications/app-of-apps/values.yaml
           cat charts/.template/applications/prod/app-of-apps-values-snippet.yaml \
             >> applications/app-of-apps/values.yaml
@@ -213,8 +213,8 @@ jobs:
             "charts/$NAME/envs/prod-values.yaml"
             "charts/$NAME/envs/test-values.yaml"
             "applications/app-of-apps-test/templates/${NAME}-dev-application.yaml"
+            "applications/app-of-apps-test/templates/${NAME}-stg-application.yaml"
             "applications/app-of-apps-test/values.yaml"
-            "applications/app-of-apps/templates/${NAME}-stg-application.yaml"
             "applications/app-of-apps/templates/${NAME}-prod-application.yaml"
             "applications/app-of-apps/values.yaml"
           )
