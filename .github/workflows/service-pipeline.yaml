@@ -20,12 +20,15 @@
 #
 # Branch / event → env file bumped + ACR routing:
 #   - push to `dev`         → charts/<repo>/envs/dev-values.yaml,  cr0test.azurecr.io
-#   - push to `main`        → charts/<repo>/envs/stg-values.yaml,  cr0shared.azurecr.io
+#   - push to `main`        → charts/<repo>/envs/stg-values.yaml,  cr0test.azurecr.io
 #   - GitHub `release`      → charts/<repo>/envs/prod-values.yaml, cr0shared.azurecr.io
 #
+# Rationale: non-prod (dev + stg) lives on aks-test-001 and pulls from cr0test
+# (devs have AcrPull there). Only prod runs on-prem and pulls from cr0shared.
+#
 # The caller's repo must expose five secrets (inherited):
-#   ACR_USERNAME,      ACR_PASSWORD       — for cr0shared.azurecr.io (stg, prod)
-#   ACR_TEST_USERNAME, ACR_TEST_PASSWORD  — for cr0test.azurecr.io (dev, test)
+#   ACR_USERNAME,      ACR_PASSWORD       — for cr0shared.azurecr.io (prod only)
+#   ACR_TEST_USERNAME, ACR_TEST_PASSWORD  — for cr0test.azurecr.io (dev + stg)
 #   CHARTS_REPO_TOKEN                     — PAT with contents:write + pull_requests:write on the chart repo
 
 name: Service pipeline
@@ -93,18 +96,18 @@ jobs:
     needs: [ImageVersion]
     uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name) }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.event_name == 'release' && 'cr0shared.azurecr.io' || 'cr0test.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
       lint_step: ${{ inputs.lint_step }}
       test_step: ${{ inputs.test_step }}
-      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name), needs.ImageVersion.outputs.image_version) }}
+      build_step: ${{ inputs.build_step != '' && inputs.build_step || format('docker build -t {0}:{1} .', inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.event_name == 'release' && 'cr0shared.azurecr.io' || 'cr0test.azurecr.io', github.event.repository.name), needs.ImageVersion.outputs.image_version) }}
 
   Security:
     name: 🔐 Security scan
     needs: [ImageVersion, Build]
     uses: idvilnius/gha-workflows/.github/workflows/security.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name) }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.event_name == 'release' && 'cr0shared.azurecr.io' || 'cr0test.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
 
   Publish:
@@ -113,11 +116,11 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
     uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
     with:
-      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.ref == 'refs/heads/dev' && 'cr0test.azurecr.io' || 'cr0shared.azurecr.io', github.event.repository.name) }}
+      docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.event_name == 'release' && 'cr0shared.azurecr.io' || 'cr0test.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}
     secrets:
-      acr_username: ${{ github.ref == 'refs/heads/dev' && secrets.ACR_TEST_USERNAME || secrets.ACR_USERNAME }}
-      acr_password: ${{ github.ref == 'refs/heads/dev' && secrets.ACR_TEST_PASSWORD || secrets.ACR_PASSWORD }}
+      acr_username: ${{ github.event_name == 'release' && secrets.ACR_USERNAME || secrets.ACR_TEST_USERNAME }}
+      acr_password: ${{ github.event_name == 'release' && secrets.ACR_PASSWORD || secrets.ACR_TEST_PASSWORD }}
 
   EnsureChart:
     name: 🌱 Bootstrap chart if missing
