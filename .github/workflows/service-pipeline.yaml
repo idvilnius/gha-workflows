@@ -261,16 +261,17 @@ jobs:
           - \`app.ingress.hosts[0].host\` — the public hostname for that env
 
           ## ACR routing (already wired in env files)
-          - \`envs/stg-values.yaml\` and \`envs/prod-values.yaml\` →
-            \`cr0shared.azurecr.io/$NAME\`
-          - \`envs/dev-values.yaml\` and \`envs/test-values.yaml\` →
-            \`cr0test.azurecr.io/$NAME\`
+          - \`envs/prod-values.yaml\` → \`cr0shared.azurecr.io/$NAME\` (prod only)
+          - \`envs/{dev,stg,test}-values.yaml\` → \`cr0test.azurecr.io/$NAME\`
 
-          The bootstrap build runs on \`main\`, so the first image tag
-          (\`$TAG\`) is in **cr0shared**. It is pre-filled in all three env
-          files, but the dev pod will ImagePullBackOff until you push to
-          the \`dev\` branch (which will publish \`$NAME:<sha>\` to
-          cr0test). That is expected.
+          The bootstrap build runs on \`main\` and publishes to **cr0test**,
+          which matches stg-values.yaml (\`$TAG\` already pre-filled). Dev
+          and test pods will ImagePullBackOff until you push to the \`dev\`
+          branch (publishes to cr0test under that branch's SHA). Prod
+          starts at \`replicaCount: 0\` and will stay there until you cut
+          your first GitHub \`release\` — that event publishes to
+          cr0shared and CI bumps prod-values.yaml automatically. Flip
+          \`replicaCount\` to 1 in prod-values.yaml after the release lands.
 
           ## After merging
           - **AutoSync is enabled** for all 3 ArgoCD Applications. Pods will create
