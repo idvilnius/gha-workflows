@@ -37,10 +37,10 @@ on:
   workflow_call:
     inputs:
       auto_merge:
-        description: 'Auto-merge the bump PR (does not apply to bootstrap PR)'
+        description: 'If true (default), commit the image-tag bump directly to the chart repo base branch. Set false to open a PR instead. Does not apply to the bootstrap PR.'
         type: boolean
         required: false
-        default: false
+        default: true
       chart_repo:
         description: 'owner/repo of the Helm chart repo'
         type: string
