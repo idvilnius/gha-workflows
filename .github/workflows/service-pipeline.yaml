@@ -95,6 +95,11 @@ jobs:
     name: 🧪 Lint, test, build
     needs: [ImageVersion]
     uses: idvilnius/gha-workflows/.github/workflows/build-env.yaml@main
+    # Forward all caller secrets so build steps can reach build-time tokens
+    # (e.g. SENTRY_AUTH_TOKEN for source-map upload). `secrets: inherit` on the
+    # per-service workflow only reaches this pipeline — nested calls must
+    # re-forward, otherwise the build job sees no secrets.
+    secrets: inherit
     with:
       docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.event_name == 'release' && 'cr0shared.azurecr.io' || 'cr0test.azurecr.io', github.event.repository.name) }}
       image_tag: ${{ needs.ImageVersion.outputs.image_version }}

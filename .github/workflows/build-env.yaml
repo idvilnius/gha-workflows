@@ -62,6 +62,10 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Build Docker Image
+        # Build-time secrets reach the build shell here. Empty for services
+        # that don't set them (the build step simply won't use them).
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: ${{ inputs.build_step }}
 
       - name: Save Docker Image to Artifact
