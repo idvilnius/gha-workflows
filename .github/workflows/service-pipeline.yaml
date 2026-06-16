@@ -85,6 +85,20 @@ on:
         type: string
         required: false
         default: ''
+    # Declared so cross-org callers can pass them explicitly (secrets: inherit
+    # does NOT forward secrets to a reusable workflow in a different org).
+    # Same-org callers using `secrets: inherit` still fill these automatically.
+    secrets:
+      ACR_USERNAME:
+        required: false
+      ACR_PASSWORD:
+        required: false
+      ACR_TEST_USERNAME:
+        required: false
+      ACR_TEST_PASSWORD:
+        required: false
+      CHARTS_REPO_TOKEN:
+        required: false
 
 jobs:
   ImageVersion:
