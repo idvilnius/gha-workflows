@@ -26,6 +26,11 @@
 # Rationale: non-prod (dev + stg) lives on aks-test-001 and pulls from cr0test
 # (devs have AcrPull there). Only prod runs on-prem and pulls from cr0shared.
 #
+# Repo variable (optional):
+#   DEPLOY_ENABLED=false — build, lint and scan still run, but the pipeline
+#   stops before publishing to ACR: no image push, no chart bootstrap, no tag
+#   bump. For repos that are not deployed (templates, decommissioned services).
+#
 # The caller's repo must expose five secrets (inherited):
 #   ACR_USERNAME,      ACR_PASSWORD       — for cr0shared.azurecr.io (prod only)
 #   ACR_TEST_USERNAME, ACR_TEST_PASSWORD  — for cr0test.azurecr.io (dev + stg)
@@ -132,7 +137,12 @@ jobs:
   Publish:
     name: 📦 Publish to ACR
     needs: [ImageVersion, Security]
-    if: ${{ github.event_name == 'push' || github.event_name == 'release' }}
+    # A repo variable DEPLOY_ENABLED=false turns off everything past the build:
+    # no ACR push, no chart bootstrap, no tag bump. Lint / build / scan keep
+    # running on every push and PR. Used by repos that are no longer deployed
+    # (e.g. nextjs_boilerplate, which is a template only). The variable is unset
+    # in every other repo, so they publish exactly as before.
+    if: ${{ (github.event_name == 'push' || github.event_name == 'release') && vars.DEPLOY_ENABLED != 'false' }}
     uses: idvilnius/gha-workflows/.github/workflows/publish-acr.yaml@main
     with:
       docker_image: ${{ inputs.acr_image != '' && inputs.acr_image || format('{0}/{1}', github.event_name == 'release' && 'cr0shared.azurecr.io' || 'cr0test.azurecr.io', github.event.repository.name) }}
